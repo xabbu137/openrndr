@@ -1,5 +1,8 @@
 package org.openrndr.internal.gl3
 
+import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.experimental.sync.Mutex
+import kotlinx.coroutines.experimental.sync.withLock
 import org.openrndr.draw.ColorBuffer
 import org.openrndr.draw.DepthBuffer
 import org.openrndr.draw.ProgramRenderTarget
@@ -10,6 +13,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL20.glDrawBuffers
 import org.lwjgl.opengl.GL30.*
 import org.openrndr.Program
+import org.openrndr.internal.Driver
 import java.util.*
 
 private val active = mutableMapOf<Long, Stack<RenderTargetGL3>>()
@@ -28,12 +32,13 @@ class ProgramRenderTargetGL3(override val program: Program) : ProgramRenderTarge
     override val hasDepthBuffer = true
 }
 
-open class RenderTargetGL3(val framebuffer: Int, override val width: Int, override val height: Int, override val contentScale: Double) : RenderTarget {
+open class RenderTargetGL3(val framebuffer: Int, override val width: Int, override val height: Int, override val contentScale: Double, val thread: Thread = Thread.currentThread()) : RenderTarget {
     override val colorBuffers: List<ColorBuffer>
         get() = _colorBuffers.map { it }
 
+    private val mutex = Mutex()
     override val depthBuffer: DepthBuffer?
-    get() = _depthBuffer
+        get() = _depthBuffer
 
     private val colorBufferIndices = mutableMapOf<String, Int>()
     private val _colorBuffers = mutableListOf<ColorBufferGL3>()
@@ -46,26 +51,27 @@ open class RenderTargetGL3(val framebuffer: Int, override val width: Int, overri
             return RenderTargetGL3(framebuffer, width, height, contentScale)
         }
 
-        val activeRenderTarget:RenderTargetGL3
-        get() {
-            val stack = active.getOrPut(glfwGetCurrentContext()) { Stack() }
-            return stack.peek()
-        }
+        val activeRenderTarget: RenderTargetGL3
+            get() {
+                val stack = active.getOrPut(glfwGetCurrentContext()) { Stack() }
+                return stack.peek()
+            }
     }
+
     private var bound = false
 
-    override val hasColorBuffer:Boolean get() = colorBuffers.isNotEmpty()
-    override val hasDepthBuffer:Boolean get() = depthBuffer != null
+    override val hasColorBuffer: Boolean get() = colorBuffers.isNotEmpty()
+    override val hasDepthBuffer: Boolean get() = depthBuffer != null
 
     override fun colorBuffer(index: Int): ColorBuffer {
         return _colorBuffers[index]
     }
 
-    override fun colorBuffer(name: String):ColorBuffer {
-       return _colorBuffers[colorBufferIndices[name]!!]
+    override fun colorBuffer(name: String): ColorBuffer {
+        return _colorBuffers[colorBufferIndices[name]!!]
     }
 
-    override fun colorBufferIndex(name:String):Int {
+    override fun colorBufferIndex(name: String): Int {
         return colorBufferIndices[name]!!
     }
 
@@ -82,7 +88,11 @@ open class RenderTargetGL3(val framebuffer: Int, override val width: Int, overri
         }
     }
 
-    internal fun bindTarget() {
+    private fun bindTarget() {
+        if (Thread.currentThread() != thread) {
+            throw IllegalStateException("this render target is created by $thread and cannot be bound to ${Thread.currentThread()}")
+        }
+
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer)
 
         debugGLErrors { null }
@@ -211,6 +221,26 @@ open class RenderTargetGL3(val framebuffer: Int, override val width: Int, overri
 
     override fun destroy() {
         glDeleteFramebuffers(framebuffer)
+    }
+
+    override fun ifFree(f: () -> Unit) {
+        if (!mutex.isLocked) {
+            runBlocking {
+                mutex.withLock {
+                    f()
+                    Driver.instance.finish()
+                }
+            }
+        }
+    }
+
+    override fun whenFree(f: () -> Unit) {
+        runBlocking {
+            mutex.withLock {
+                f()
+                Driver.instance.finish()
+            }
+        }
     }
 }
 

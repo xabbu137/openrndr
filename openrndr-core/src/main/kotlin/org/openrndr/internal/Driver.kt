@@ -56,6 +56,7 @@ interface Driver {
 
 
     fun createResourceThread(f: () -> Unit): ResourceThread
+    fun createDrawThread() : DrawThread
 
     fun clear(r: Double, g: Double, b: Double, a: Double)
     fun clear(r: Float, g: Float, b: Float, a: Float) {
@@ -95,6 +96,8 @@ interface Driver {
     val activeRenderTarget: RenderTarget
 
     fun internalShaderResource(resourceId: String): String
+
+    fun finish()
 
     companion object {
         lateinit var driver: Driver

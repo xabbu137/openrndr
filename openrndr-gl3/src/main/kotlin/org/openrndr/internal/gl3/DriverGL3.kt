@@ -6,6 +6,7 @@ import org.lwjgl.opengl.GL11
 import org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER
 import org.lwjgl.opengl.GL15.glBindBuffer
 import org.lwjgl.opengl.GL20.*
+import org.lwjgl.opengl.GL30
 import org.lwjgl.opengl.GL30.glBindVertexArray
 import org.lwjgl.opengl.GL30.glGenVertexArrays
 import org.lwjgl.opengl.GL31.glDrawArraysInstanced
@@ -19,28 +20,39 @@ import org.openrndr.internal.FontMapManager
 import org.openrndr.internal.ResourceThread
 import org.openrndr.internal.ShaderGenerators
 import org.openrndr.math.Matrix44
+import java.math.BigInteger
 
 import java.nio.Buffer
+import java.util.*
 
 private val logger = KotlinLogging.logger {}
 internal val useDebugContext = System.getProperty("org.openrndr.gl3.debug") != null
 
 class DriverGL3 : Driver {
-
-
-    override val contextID: Long get() {
-        return GLFW.glfwGetCurrentContext()
-    }
+    override val contextID: Long
+        get() {
+            return GLFW.glfwGetCurrentContext()
+        }
 
     override fun createResourceThread(f: () -> Unit): ResourceThread {
         return ResourceThreadGL3.create(f)
     }
+
+    override fun createDrawThread() : DrawThread {
+        return DrawThreadGL3.create()
+    }
+
     override val shaderGenerators: ShaderGenerators = ShaderGeneratorsGL3()
     private val vaos = mutableMapOf<Long, Int>()
-    internal var defaultVAO = 1
+    private val defaultVAOs = WeakHashMap<Thread, Int>()
+    internal val defaultVAO: Int get() = defaultVAOs.getOrPut(Thread.currentThread()) {
+        val vaos = IntArray(1)
+        GL30.glGenVertexArrays(vaos)
+        vaos[0]
+    }
 
     private fun hash(shader: ShaderGL3, vertexBuffers: List<VertexBuffer>, instanceAttributes: List<VertexBuffer>): Long {
-        var hash = 0L
+        var hash = Thread.currentThread().id%16L
         hash += shader.program
         for (i in 0 until vertexBuffers.size) {
             hash += (vertexBuffers[i] as VertexBufferGL3).bufferHash shl (12 + (i * 12))
@@ -159,7 +171,7 @@ class DriverGL3 : Driver {
         return DepthBufferGL3.create(width, height, format)
     }
 
-    override fun createDynamicIndexBuffer(elementCount: Int, type: IndexType):IndexBuffer {
+    override fun createDynamicIndexBuffer(elementCount: Int, type: IndexType): IndexBuffer {
         return IndexBufferGL3.create(elementCount, type)
     }
 
@@ -246,9 +258,9 @@ class DriverGL3 : Driver {
             glBindVertexArray(defaultVAO)
             arrays[0]
         }
-
+        debugGLErrors()
         glBindVertexArray(vao)
-
+        debugGLErrors()
         logger.trace { "drawing $instanceCount instances with $drawPrimitive(${drawPrimitive.glType()}) and $vertexCount vertices with vertexOffset $vertexOffset " }
         glDrawArraysInstanced(drawPrimitive.glType(), vertexOffset, vertexCount, instanceCount)
         debugGLErrors {
@@ -263,6 +275,10 @@ class DriverGL3 : Driver {
         glBindVertexArray(defaultVAO)
     }
 
+    override fun finish() {
+        GL11.glFlush()
+        GL11.glFinish()
+    }
     override fun drawIndexedInstances(shader: Shader, indexBuffer: IndexBuffer, vertexBuffers: List<VertexBuffer>, instanceAttributes: List<VertexBuffer>, drawPrimitive: DrawPrimitive, indexOffset: Int, indexCount: Int, instanceCount: Int) {
 
         // -- find or create a VAO for our shader + vertex buffers + instance buffers combination

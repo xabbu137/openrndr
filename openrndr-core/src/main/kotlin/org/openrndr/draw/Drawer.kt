@@ -2,6 +2,7 @@
 
 package org.openrndr.draw
 
+import kotlinx.coroutines.experimental.sync.Mutex
 import org.openrndr.Program
 import org.openrndr.color.ColorRGBa
 import org.openrndr.internal.*
@@ -458,6 +459,9 @@ interface RenderTarget {
 
     val hasDepthBuffer: Boolean
     val hasColorBuffer: Boolean
+
+    fun ifFree(f:()->Unit)
+    fun whenFree(f:()->Unit)
 }
 
 fun renderTarget(width: Int, height: Int, contentScale: Double = 1.0, builder: RenderTargetBuilder.() -> Unit): RenderTarget {
@@ -610,7 +614,9 @@ class Drawer(val driver: Driver) {
 
     fun withTarget(target: RenderTarget, action: Drawer.() -> Unit) {
         target.bind()
-        this.action()
+        target.whenFree {
+            this.action()
+        }
         target.unbind()
     }
 
@@ -1102,6 +1108,8 @@ fun Drawer.isolated(function: Drawer.() -> Unit) {
  */
 fun Drawer.isolatedWithTarget(target: RenderTarget, function: Drawer.() -> Unit) {
     target.bind()
-    isolated(function)
+    target.whenFree {
+        isolated(function)
+    }
     target.unbind()
 }
